@@ -35,8 +35,8 @@ func jwtInit(timeout int) {
 	authMiddleware, err = jwt.New(&jwt.GinJWTMiddleware{
 		Realm:       "trojan-manager",
 		Key:         []byte(getSecretKey()),
-		Timeout:     time.Minute * time.Duration(timeout),
-		MaxRefresh:  time.Minute * time.Duration(timeout),
+		Timeout:     time.Minute * time.Duration(timeout),  // Token 有效期（默认120分钟）
+		MaxRefresh:  time.Hour * 24,                        // Token 可刷新窗口：24小时
 		IdentityKey: identityKey,
 		SendCookie:  true,
 		PayloadFunc: func(data interface{}) jwt.MapClaims {
