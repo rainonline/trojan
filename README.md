@@ -93,6 +93,31 @@ Flags:
   -h, --help   help for trojan
 ```
 
+## 📚 项目文档
+
+完整的项目文档请访问 [docs/](docs/) 目录：
+
+- **📄 [文档索引](docs/README.md)** - 所有文档的导航页面
+- **🔄 [依赖更新](docs/dependency-updates/)** - Go版本和依赖包更新记录
+- **🔧 [重构计划](docs/refactor/)** - 代码重构和优化规划
+- **🛡️ [安全修复](docs/fixes/)** - 安全漏洞修复记录
+
+### 快速链接
+
+| 主题 | 文档 | 描述 |
+|-----|------|------|
+| 🚀 最新更新 | [UPDATE_SUMMARY.md](docs/dependency-updates/UPDATE_SUMMARY.md) | Go 1.25.2 升级摘要 |
+| 📋 重构计划 | [REFACTOR_PLAN.md](docs/refactor/REFACTOR_PLAN.md) | 15个重构任务规划 |
+| 🔒 安全修复 | [SQL_INJECTION_FIX_REPORT.md](docs/fixes/SQL_INJECTION_FIX_REPORT.md) | SQL注入漏洞修复 |
+
+## 技术栈
+
+- **Go**: 1.25.2
+- **Web框架**: Gin v1.11.0  
+- **数据库**: MySQL 8.0+ / MariaDB 10.2+
+- **JSON库**: Sonic v1.14.1
+- **命令行**: Cobra v1.10.1
+
 ## 注意
 安装完trojan后强烈建议开启BBR等加速: [one_click_script](https://github.com/jinwyp/one_click_script)  
 
