@@ -308,13 +308,15 @@ func (mysql *Mysql) DeleteUser(id uint) error {
 	return nil
 }
 
-// MonthlyResetData 设置了过期时间的用户，每月定时清空使用流量
+// MonthlyResetData 每月定时清空所有有流量限额用户的使用流量
 func (mysql *Mysql) MonthlyResetData() error {
 	db := mysql.GetDB()
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	userList, err := queryUserList(db, "SELECT * FROM users WHERE useDays != 0 AND quota != 0")
+	// 修复：重置所有有流量限额的用户，不应该依赖 useDays 条件
+	// 原逻辑 "useDays != 0 AND quota != 0" 导致未设置有效期的用户流量不会重置
+	userList, err := queryUserList(db, "SELECT * FROM users WHERE quota != 0")
 	if err != nil {
 		return err
 	}
