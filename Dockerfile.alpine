@@ -1,0 +1,75 @@
+# ============================================
+# 多阶段构建: Builder 阶段
+# ============================================
+FROM golang:1.25.2-alpine AS builder
+
+# 设置工作目录
+WORKDIR /build
+
+# 安装构建依赖
+RUN apk add --no-cache git make bash
+
+# 复制依赖文件
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 复制源代码
+COPY . .
+
+# 构建二进制（带版本信息）
+ARG VERSION=dev
+ARG BUILD_DATE
+ARG GIT_COMMIT
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags "-w -s \
+    -X 'trojan/trojan.MVersion=${VERSION}' \
+    -X 'trojan/trojan.BuildDate=${BUILD_DATE}' \
+    -X 'trojan/trojan.GitVersion=${GIT_COMMIT}'" \
+    -o trojan .
+
+# ============================================
+# 运行阶段: 最小化镜像
+# ============================================
+FROM alpine:3.20
+
+LABEL maintainer="Trojan Team" \
+      version="${VERSION}" \
+      description="Trojan Multi-User Management System"
+
+# 创建非 root 用户
+RUN addgroup -g 1000 -S trojan && \
+    adduser -u 1000 -S trojan -G trojan
+
+# 安装运行时依赖
+RUN apk add --no-cache \
+    ca-certificates \
+    socat \
+    bash \
+    tzdata \
+    curl \
+    && rm -rf /var/cache/apk/*
+
+# 从 builder 复制二进制
+COPY --from=builder /build/trojan /usr/local/bin/trojan
+RUN chmod +x /usr/local/bin/trojan
+
+# 创建必要的目录
+RUN mkdir -p /etc/trojan /var/lib/trojan /var/log/trojan && \
+    chown -R trojan:trojan /etc/trojan /var/lib/trojan /var/log/trojan
+
+# 切换到非 root 用户
+USER trojan
+
+# 工作目录
+WORKDIR /var/lib/trojan
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# 暴露端口
+EXPOSE 443 8080
+
+# 入口点
+ENTRYPOINT ["/usr/local/bin/trojan"]
+CMD ["web"]

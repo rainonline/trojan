@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/gin-gonic/gin"
 	"github.com/robfig/cron/v3"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
@@ -136,6 +137,28 @@ func CollectTask() {
 		lastIO = result
 	})
 	c.Start()
+}
+
+// Health 健康检查端点（用于 Docker/Kubernetes）
+func Health(c *gin.Context) {
+	// 检查数据库连接
+	mysql := core.GetMysql()
+	db := mysql.GetDB()
+	if err := db.Ping(); err != nil {
+		c.JSON(503, gin.H{
+			"status":  "unhealthy",
+			"error":   "database connection failed",
+			"message": err.Error(),
+		})
+		return
+	}
+	
+	c.JSON(200, gin.H{
+		"status":    "healthy",
+		"version":   trojan.MVersion,
+		"buildDate": trojan.BuildDate,
+		"timestamp": time.Now().Unix(),
+	})
 }
 
 // ServerInfo 获取服务器信息

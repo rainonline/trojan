@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 构建产物
+result/
+*.exe
+*.dll
+*.so
+*.dylib
+trojan
+trojan-*
+
+# 测试文件
+*_test.go
+*.test
+*.out
+coverage.*
+
+# 文档
+*.md
+!README.md
+docs/
+LICENSE
+
+# 配置文件
+.env
+.env.local
+*.json
+!go.sum
+
+# 日志和数据
+logs/
+*.log
+backup/
+*.sql
+*.gz
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+.DS_Store
+
+# Docker
+Dockerfile.old
+docker-compose.override.yml

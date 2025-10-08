@@ -166,9 +166,13 @@ func staticRouter(router *gin.Engine) {
 }
 
 func noTokenRouter(router *gin.Engine) {
+	// Clash 订阅（无需认证）
 	router.GET("/trojan/user/subscribe", func(c *gin.Context) {
 		controller.ClashSubInfo(c)
 	})
+	
+	// 健康检查端点（无需认证，用于 Docker/K8s）
+	router.GET("/health", controller.Health)
 }
 
 // Start web启动入口

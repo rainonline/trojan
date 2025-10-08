@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # MariaDB 数据库
+  # ==========================================
+  mariadb:
+    image: mariadb:11.5-jammy
+    container_name: trojan-mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-trojan_secure_pass}
+      MYSQL_DATABASE: trojan
+      MYSQL_USER: trojan
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-trojan_pass}
+      TZ: Asia/Shanghai
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./backup:/backup
+    networks:
+      - trojan-net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max_connections=200
+      --innodb_buffer_pool_size=256M
+
+  # ==========================================
+  # Trojan 主服务
+  # ==========================================
+  trojan:
+    build:
+      context: .
+      dockerfile: Dockerfile.alpine
+      args:
+        VERSION: ${VERSION:-latest}
+        BUILD_DATE: ${BUILD_DATE}
+        GIT_COMMIT: ${GIT_COMMIT}
+    image: trojan:${VERSION:-latest}
+    container_name: trojan-app
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    ports:
+      - "443:443"      # Trojan 服务端口
+      - "8080:8080"    # Web 管理界面
+    environment:
+      # 数据库配置
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_USER: trojan
+      DB_PASSWORD: ${MYSQL_PASSWORD:-trojan_pass}
+      DB_NAME: trojan
+      
+      # 应用配置
+      TZ: Asia/Shanghai
+      TROJAN_DOMAIN: ${TROJAN_DOMAIN}
+      WEB_PORT: 8080
+      
+      # JWT 配置
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRE: 86400  # 24小时
+      
+      # 日志级别
+      LOG_LEVEL: info
+    volumes:
+      - trojan_config:/etc/trojan
+      - trojan_data:/var/lib/trojan
+      - trojan_certs:/etc/trojan/certs
+      - ./logs:/var/log/trojan
+    networks:
+      - trojan-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # 安全设置
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE  # 允许绑定 443 端口
+    read_only: false
+    tmpfs:
+      - /tmp
+
+  # ==========================================
+  # Redis 缓存（可选，用于高性能场景）
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: trojan-redis
+    restart: unless-stopped
+    profiles:
+      - with-redis  # 使用 profile 控制是否启用
+    command: >
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - trojan-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+# ==========================================
+# 数据卷
+# ==========================================
+volumes:
+  mariadb_data:
+    driver: local
+  trojan_config:
+    driver: local
+  trojan_data:
+    driver: local
+  trojan_certs:
+    driver: local
+  redis_data:
+    driver: local
+
+# ==========================================
+# 网络
+# ==========================================
+networks:
+  trojan-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
