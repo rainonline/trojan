@@ -154,9 +154,8 @@ func ImportCsv(c *gin.Context) *ResponseBody {
 		return &responseBody
 	}
 	for _, user := range userList {
-		if _, err = db.Exec(fmt.Sprintf(`
-INSERT INTO users(username, password, passwordShow, quota, download, upload, useDays, expiryDate) VALUES ('%s','%s','%s', %d, %d, %d, %d, '%s');`,
-			user.Username, user.EncryptPass, user.Password, user.Quota, user.Download, user.Upload, user.UseDays, user.ExpiryDate)); err != nil {
+		if _, err = db.Exec("INSERT INTO users(username, password, passwordShow, quota, download, upload, useDays, expiryDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			user.Username, user.EncryptPass, user.Password, user.Quota, user.Download, user.Upload, user.UseDays, user.ExpiryDate); err != nil {
 			responseBody.Msg = err.Error()
 			return &responseBody
 		}

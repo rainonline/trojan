@@ -11,6 +11,11 @@ import (
 	"trojan/util"
 )
 
+// escapeSQLString 转义SQL字符串以防止SQL注入
+func escapeSQLString(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 // UpgradeDB 升级数据库表结构以及迁移数据
 func (mysql *Mysql) UpgradeDB() error {
 	db := mysql.GetDB()
@@ -34,7 +39,7 @@ func (mysql *Mysql) UpgradeDB() error {
 			pass, _ := GetValue(fmt.Sprintf("%s_pass", user.Username))
 			if pass != "" {
 				base64Pass := base64.StdEncoding.EncodeToString([]byte(pass))
-				if _, err := db.Exec(fmt.Sprintf("UPDATE users SET passwordShow='%s' WHERE id=%d;", base64Pass, user.ID)); err != nil {
+				if _, err := db.Exec("UPDATE users SET passwordShow=? WHERE id=?", base64Pass, user.ID); err != nil {
 					fmt.Println(err)
 					return err
 				}
@@ -85,7 +90,14 @@ func (mysql *Mysql) DumpSql(filePath string) error {
 	for _, user := range userList {
 		writer.WriteString(fmt.Sprintf(`
 INSERT INTO users(username, password, passwordShow, quota, download, upload, useDays, expiryDate) VALUES ('%s','%s','%s', %d, %d, %d, %d, '%s');`,
-			user.Username, user.EncryptPass, user.Password, user.Quota, user.Download, user.Upload, user.UseDays, user.ExpiryDate))
+			escapeSQLString(user.Username), 
+			escapeSQLString(user.EncryptPass), 
+			escapeSQLString(user.Password), 
+			user.Quota, 
+			user.Download, 
+			user.Upload, 
+			user.UseDays, 
+			escapeSQLString(user.ExpiryDate)))
 	}
 	writer.WriteString("\n")
 	writer.Flush()
