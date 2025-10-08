@@ -63,10 +63,11 @@ JWT required except `/trojan/user/subscribe` (Clash subscription). Key endpoints
 # Install/Update on server
 source <(curl -sL https://git.io/trojan-install)
 
-# Docker development
-docker run --net=host jrohy/trojan init
-docker exec -it trojan bash
-trojan  # Interactive CLI
+# Docker development (推荐使用新版 docker-compose)
+cd trojan
+cp .env.example .env
+./docker/manage.sh start
+./docker/manage.sh menu  # Interactive CLI
 ```
 
 ### Testing Changes
@@ -74,7 +75,7 @@ trojan  # Interactive CLI
 2. Rebuild: `go build -o trojan .`
 3. Replace binary: `cp trojan /usr/local/bin/`
 4. Test CLI: `trojan` → Navigate menus
-5. Test web: `systemctl restart trojan-web` → https://domain
+5. Test web: 访问 https://domain （Docker 方式：`./docker/manage.sh restart`）
 
 ### Adding New Commands
 1. Create `cmd/newcmd.go` with cobra command

@@ -65,60 +65,6 @@ vim .env  # 修改数据库密码、域名等配置
 
 **详细文档**：[Docker 快速开始](docs/deployment/DOCKER_QUICKSTART.md) | [完整部署方案](docs/deployment/DOCKER_DEPLOYMENT.md)
 
-### c. docker运行（旧版，不推荐）
-<details>
-<summary>点击展开旧版 Docker 部署方式</summary>
-
-1. 安装mysql  
-
-因为mariadb内存使用比mysql至少减少一半, 所以推荐使用mariadb数据库
-```
-docker run --name trojan-mariadb --restart=always -p 3306:3306 -v /home/mariadb:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=trojan -e MYSQL_ROOT_HOST=% -e MYSQL_DATABASE=trojan -d mariadb:10.2
-```
-端口和root密码以及持久化目录都可以改成其他的
-
-2. 安装trojan
-```
-docker run -it -d --name trojan --net=host --restart=always --privileged jrohy/trojan init
-```
-运行完后进入容器 `docker exec -it trojan bash`, 然后输入'trojan'即可进行初始化安装   
-
-启动web服务: `systemctl start trojan-web`   
-
-设置自启动: `systemctl enable trojan-web`
-
-更新管理程序: `source <(curl -sL https://git.io/trojan-install)`
-
-</details>
-
-````
-
-```
-安装完后输入'trojan'可进入管理程序   
-浏览器访问 https://域名 可在线web页面管理trojan用户  
-前端页面源码地址: [trojan-web](https://github.com/Jrohy/trojan-web)
-
-### b. docker运行
-1. 安装mysql  
-
-因为mariadb内存使用比mysql至少减少一半, 所以推荐使用mariadb数据库
-```
-docker run --name trojan-mariadb --restart=always -p 3306:3306 -v /home/mariadb:/var/lib/mysql -e MYSQL_ROOT_PASSWORD=trojan -e MYSQL_ROOT_HOST=% -e MYSQL_DATABASE=trojan -d mariadb:10.2
-```
-端口和root密码以及持久化目录都可以改成其他的
-
-2. 安装trojan
-```
-docker run -it -d --name trojan --net=host --restart=always --privileged jrohy/trojan init
-```
-运行完后进入容器 `docker exec -it trojan bash`, 然后输入'trojan'即可进行初始化安装   
-
-启动web服务: `systemctl start trojan-web`   
-
-设置自启动: `systemctl enable trojan-web`
-
-更新管理程序: `source <(curl -sL https://git.io/trojan-install)`
-
 ## 运行截图
 ![avatar](asset/1.png)
 ![avatar](asset/2.png)
