@@ -1,0 +1,216 @@
+package core
+
+import (
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/assert"
+)
+
+// TestCreateUser_ParameterizedQuery 测试CreateUser使用参数化查询
+func TestCreateUser_ParameterizedQuery(t *testing.T) {
+	// 创建mock数据库
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("创建mock数据库失败: %s", err)
+	}
+	defer db.Close()
+
+	// 测试正常用户名
+	t.Run("正常用户名", func(t *testing.T) {
+		username := "testuser"
+		base64Pass := "dGVzdHBhc3M="
+		originPass := "testpass"
+
+		// 期望执行参数化查询
+		mock.ExpectExec("INSERT INTO users").
+			WithArgs(username, sqlmock.AnyArg(), base64Pass).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		mysql := &Mysql{
+			ServerAddr: "localhost",
+			ServerPort: 3306,
+			Database:   "test",
+			Username:   "root",
+			Password:   "password",
+		}
+
+		// 注意：这里需要修改Mysql结构以支持注入mock db
+		// 实际实现时，建议使用依赖注入模式
+		err := mysql.CreateUser(username, base64Pass, originPass)
+		assert.NoError(t, err)
+
+		// 验证所有期望都被满足
+		err = mock.ExpectationsWereMet()
+		assert.NoError(t, err)
+	})
+
+	// 测试SQL注入尝试
+	t.Run("SQL注入防护", func(t *testing.T) {
+		// 恶意用户名尝试SQL注入
+		maliciousUsername := "admin' OR '1'='1"
+		base64Pass := "dGVzdHBhc3M="
+		originPass := "testpass"
+
+		// 参数化查询会将整个字符串作为参数，不会解析为SQL
+		mock.ExpectExec("INSERT INTO users").
+			WithArgs(maliciousUsername, sqlmock.AnyArg(), base64Pass).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		mysql := &Mysql{
+			ServerAddr: "localhost",
+			ServerPort: 3306,
+			Database:   "test",
+			Username:   "root",
+			Password:   "password",
+		}
+
+		err := mysql.CreateUser(maliciousUsername, base64Pass, originPass)
+		assert.NoError(t, err)
+
+		// 验证SQL注入被阻止 - 恶意字符串被当作普通参数
+		err = mock.ExpectationsWereMet()
+		assert.NoError(t, err)
+	})
+}
+
+// TestUpdateUser_ParameterizedQuery 测试UpdateUser使用参数化查询
+func TestUpdateUser_ParameterizedQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("创建mock数据库失败: %s", err)
+	}
+	defer db.Close()
+
+	t.Run("SQL注入防护 - 用户名", func(t *testing.T) {
+		id := uint(1)
+		maliciousUsername := "'; DROP TABLE users; --"
+		base64Pass := "dGVzdHBhc3M="
+		originPass := "testpass"
+
+		// 参数化查询会安全处理特殊字符
+		mock.ExpectExec("UPDATE users SET").
+			WithArgs(maliciousUsername, sqlmock.AnyArg(), base64Pass, id).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		mysql := &Mysql{
+			ServerAddr: "localhost",
+			ServerPort: 3306,
+			Database:   "test",
+			Username:   "root",
+			Password:   "password",
+		}
+
+		err := mysql.UpdateUser(id, maliciousUsername, base64Pass, originPass)
+		assert.NoError(t, err)
+
+		err = mock.ExpectationsWereMet()
+		assert.NoError(t, err)
+	})
+}
+
+// TestGetUserByName_ParameterizedQuery 测试GetUserByName使用参数化查询
+func TestGetUserByName_ParameterizedQuery(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("创建mock数据库失败: %s", err)
+	}
+	defer db.Close()
+
+	t.Run("SQL注入防护 - WHERE子句", func(t *testing.T) {
+		maliciousName := "admin' OR '1'='1"
+
+		// 期望查询使用参数化
+		mock.ExpectQuery("SELECT \\* FROM users WHERE BINARY username=\\?").
+			WithArgs(maliciousName).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"id", "username", "password", "passwordShow", "quota", 
+				"download", "upload", "useDays", "expiryDate",
+			}))
+
+		mysql := &Mysql{
+			ServerAddr: "localhost",
+			ServerPort: 3306,
+			Database:   "test",
+			Username:   "root",
+			Password:   "password",
+		}
+
+		// 即使输入恶意字符串，也不会返回所有用户
+		user := mysql.GetUserByName(maliciousName)
+		assert.Nil(t, user) // 没有找到该用户名（因为是mock）
+
+		err = mock.ExpectationsWereMet()
+		assert.NoError(t, err)
+	})
+}
+
+// BenchmarkCreateUser_Parameterized 基准测试参数化查询性能
+func BenchmarkCreateUser_Parameterized(b *testing.B) {
+	db, mock, _ := sqlmock.New()
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO users").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mysql := &Mysql{
+		ServerAddr: "localhost",
+		ServerPort: 3306,
+		Database:   "test",
+		Username:   "root",
+		Password:   "password",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mysql.CreateUser("testuser", "dGVzdHBhc3M=", "testpass")
+	}
+}
+
+// 集成测试示例（需要真实数据库）
+/*
+func TestCreateUser_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("跳过集成测试")
+	}
+
+	// 连接到测试数据库
+	mysql := &Mysql{
+		ServerAddr: "localhost",
+		ServerPort: 3306,
+		Database:   "trojan_test",
+		Username:   "root",
+		Password:   "password",
+	}
+
+	// 清理测试数据
+	defer func() {
+		db := mysql.GetDB()
+		db.Exec("DELETE FROM users WHERE username LIKE 'test_%'")
+		db.Close()
+	}()
+
+	t.Run("防止SQL注入攻击", func(t *testing.T) {
+		// 尝试SQL注入
+		maliciousUsername := "test_' OR '1'='1"
+		err := mysql.CreateUser(maliciousUsername, "dGVzdA==", "test")
+		assert.NoError(t, err)
+
+		// 验证用户被正确创建，而不是执行了SQL注入
+		user := mysql.GetUserByName(maliciousUsername)
+		assert.NotNil(t, user)
+		assert.Equal(t, maliciousUsername, user.Username)
+
+		// 验证没有其他用户被错误返回
+		allUsers, _ := mysql.GetData()
+		normalUserCount := 0
+		for _, u := range allUsers {
+			if u.Username == maliciousUsername {
+				normalUserCount++
+			}
+		}
+		assert.Equal(t, 1, normalUserCount, "应该只有一个匹配的用户")
+	})
+}
+*/
