@@ -2,7 +2,6 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/robfig/cron/v3"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/load"
@@ -115,7 +114,6 @@ func SetTrojanType(tType string) *ResponseBody {
 // CollectTask 启动收集主机信息任务
 func CollectTask() {
 	var recvCount, sentCount uint64
-	c := cron.New()
 	lastIO, _ := net.IOCounters(true)
 	var lastRecvCount, lastSentCount uint64
 	for _, k := range lastIO {
@@ -123,8 +121,14 @@ func CollectTask() {
 		lastSentCount = lastSentCount + k.BytesSent
 	}
 	si = &speedInfo{}
-	c.AddFunc("@every 2s", func() {
-		result, _ := net.IOCounters(true)
+	
+	// 使用统一的调度器
+	scheduler := core.GetScheduler()
+	scheduler.AddTask("network_speed_collect", "@every 2s", func() error {
+		result, err := net.IOCounters(true)
+		if err != nil {
+			return err
+		}
 		recvCount, sentCount = 0, 0
 		for _, k := range result {
 			recvCount = recvCount + k.BytesRecv
@@ -135,8 +139,8 @@ func CollectTask() {
 		lastSentCount = sentCount
 		lastRecvCount = recvCount
 		lastIO = result
+		return nil
 	})
-	c.Start()
 }
 
 // Health 健康检查端点（用于 Docker/Kubernetes）
@@ -184,6 +188,28 @@ func ServerInfo() *ResponseBody {
 		"load":     loadInfo,
 		"speed":    si,
 		"netCount": netCount,
+	}
+	return &responseBody
+}
+
+// GetTaskStats 获取定时任务统计信息
+func GetTaskStats() *ResponseBody {
+	responseBody := ResponseBody{Msg: "success"}
+	defer TimeCost(time.Now(), &responseBody)
+	scheduler := core.GetScheduler()
+	responseBody.Data = scheduler.GetTaskStats()
+	return &responseBody
+}
+
+// GetSchedulerHealth 获取调度器健康状态
+func GetSchedulerHealth() *ResponseBody {
+	responseBody := ResponseBody{Msg: "success"}
+	defer TimeCost(time.Now(), &responseBody)
+	scheduler := core.GetScheduler()
+	responseBody.Data = map[string]interface{}{
+		"healthy":   scheduler.Health(),
+		"running":   scheduler.IsRunning(),
+		"taskCount": len(scheduler.GetTaskStats()),
 	}
 	return &responseBody
 }

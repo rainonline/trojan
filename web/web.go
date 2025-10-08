@@ -1,12 +1,19 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"io/fs"
-	"net/http"
 	"strconv"
 	"trojan/core"
 	"trojan/util"
@@ -152,6 +159,13 @@ func commonRouter(router *gin.Engine) {
 		common.POST("/loginInfo", func(c *gin.Context) {
 			c.JSON(200, controller.SetLoginInfo(c.PostForm("title")))
 		})
+		// 任务统计端点
+		common.GET("/tasks/stats", func(c *gin.Context) {
+			c.JSON(200, controller.GetTaskStats())
+		})
+		common.GET("/tasks/health", func(c *gin.Context) {
+			c.JSON(200, controller.GetSchedulerHealth())
+		})
 	}
 }
 
@@ -187,14 +201,56 @@ func Start(host string, port, timeout int, isSSL bool) {
 	userRouter(router)
 	dataRouter(router)
 	commonRouter(router)
+	
+	// 初始化定时任务
 	controller.ScheduleTask()
 	controller.CollectTask()
+	
+	// 获取调度器用于优雅关闭
+	scheduler := core.GetScheduler()
+	
 	util.OpenPort(port)
-	if isSSL {
-		config := core.GetConfig()
-		ssl := &config.SSl
-		router.RunTLS(fmt.Sprintf("%s:%d", host, port), ssl.Cert, ssl.Key)
-	} else {
-		router.Run(fmt.Sprintf("%s:%d", host, port))
+	
+	// 创建 HTTP 服务器
+	srv := &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Handler: router,
 	}
+	
+	// 在 goroutine 中启动服务器
+	go func() {
+		log.Printf("Starting web server on %s:%d (SSL: %v)", host, port, isSSL)
+		var err error
+		if isSSL {
+			config := core.GetConfig()
+			ssl := &config.SSl
+			err = srv.ListenAndServeTLS(ssl.Cert, ssl.Key)
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+	
+	// 等待中断信号以优雅关闭服务器
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
+	
+	// 停止定时任务
+	log.Println("Stopping scheduler...")
+	if err := scheduler.Stop(10 * time.Second); err != nil {
+		log.Printf("Scheduler shutdown error: %v", err)
+	}
+	
+	// 关闭 HTTP 服务器
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+	
+	log.Println("Server exited")
 }
