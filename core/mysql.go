@@ -8,6 +8,7 @@ import (
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"strconv"
@@ -16,6 +17,89 @@ import (
 	// mysql sql驱动
 	_ "github.com/go-sql-driver/mysql"
 )
+
+// cacheEntry 缓存条目
+type cacheEntry struct {
+	data      interface{}
+	expiresAt time.Time
+}
+
+// simpleCache 简单的内存缓存
+type simpleCache struct {
+	items sync.Map
+	ttl   time.Duration
+}
+
+// newCache 创建新的缓存实例
+func newCache(ttl time.Duration) *simpleCache {
+	cache := &simpleCache{
+		ttl: ttl,
+	}
+	// 启动清理协程
+	go cache.cleanup()
+	return cache
+}
+
+// Set 设置缓存
+func (c *simpleCache) Set(key string, value interface{}) {
+	c.items.Store(key, &cacheEntry{
+		data:      value,
+		expiresAt: time.Now().Add(c.ttl),
+	})
+}
+
+// Get 获取缓存
+func (c *simpleCache) Get(key string) (interface{}, bool) {
+	val, ok := c.items.Load(key)
+	if !ok {
+		return nil, false
+	}
+	
+	entry := val.(*cacheEntry)
+	if time.Now().After(entry.expiresAt) {
+		c.items.Delete(key)
+		return nil, false
+	}
+	
+	return entry.data, true
+}
+
+// Delete 删除缓存
+func (c *simpleCache) Delete(key string) {
+	c.items.Delete(key)
+}
+
+// Clear 清空所有缓存
+func (c *simpleCache) Clear() {
+	c.items.Range(func(key, value interface{}) bool {
+		c.items.Delete(key)
+		return true
+	})
+}
+
+// cleanup 定期清理过期缓存
+func (c *simpleCache) cleanup() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	
+	for range ticker.C {
+		now := time.Now()
+		c.items.Range(func(key, value interface{}) bool {
+			entry := value.(*cacheEntry)
+			if now.After(entry.expiresAt) {
+				c.items.Delete(key)
+			}
+			return true
+		})
+	}
+}
+
+// 全局缓存实例
+var (
+	userCache   = newCache(5 * time.Minute) // 用户信息缓存5分钟
+	configCache = newCache(10 * time.Minute) // 配置缓存10分钟
+)
+
 
 // Mysql 结构体
 type Mysql struct {
@@ -26,6 +110,7 @@ type Mysql struct {
 	Username   string `json:"username"`
 	Password   string `json:"password"`
 	Cafile     string `json:"cafile"`
+	db         *sql.DB // 数据库连接池（私有字段）
 }
 
 // User 用户表记录结构体
@@ -63,12 +148,24 @@ CREATE TABLE IF NOT EXISTS users (
     useDays int(10) DEFAULT 0,
     expiryDate char(10) DEFAULT '',
     PRIMARY KEY (id),
-    INDEX (password)
+    INDEX idx_password (password),
+    INDEX idx_username (username),
+    INDEX idx_expiry (expiryDate)
 ) DEFAULT CHARSET=utf8mb4;
 `
 
 // GetDB 获取mysql数据库连接
+// 使用单例模式，复用连接池
 func (mysql *Mysql) GetDB() *sql.DB {
+	// 如果连接池已存在且可用，直接返回
+	if mysql.db != nil {
+		if err := mysql.db.Ping(); err == nil {
+			return mysql.db
+		}
+		// 连接失效，关闭旧连接
+		mysql.db.Close()
+	}
+
 	// 屏蔽mysql驱动包的日志输出
 	mysqlDriver.SetLogger(log.New(io.Discard, "", 0))
 	conn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s", mysql.Username, mysql.Password, mysql.ServerAddr, mysql.ServerPort, mysql.Database)
@@ -77,13 +174,27 @@ func (mysql *Mysql) GetDB() *sql.DB {
 		fmt.Println(err.Error())
 		return nil
 	}
+
+	// 配置连接池参数
+	db.SetMaxOpenConns(25)               // 最大打开连接数
+	db.SetMaxIdleConns(10)               // 最大空闲连接数
+	db.SetConnMaxLifetime(5 * time.Minute) // 连接最大生命周期
+	db.SetConnMaxIdleTime(3 * time.Minute) // 空闲连接最大生命周期
+
+	// 测试连接
+	if err := db.Ping(); err != nil {
+		fmt.Println("数据库连接失败:", err.Error())
+		db.Close()
+		return nil
+	}
+
+	mysql.db = db
 	return db
 }
 
 // CreateTable 不存在trojan user表则自动创建
 func (mysql *Mysql) CreateTable() {
 	db := mysql.GetDB()
-	defer db.Close()
 	if _, err := db.Exec(CreateTableSql); err != nil {
 		fmt.Println(err)
 	}
@@ -151,12 +262,13 @@ func (mysql *Mysql) CreateUser(username string, base64Pass string, originPass st
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	encryPass := sha256.Sum224([]byte(originPass))
 	if _, err := db.Exec("INSERT INTO users(username, password, passwordShow, quota) VALUES (?, ?, ?, -1)", username, fmt.Sprintf("%x", encryPass), base64Pass); err != nil {
 		fmt.Println(err)
 		return err
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -166,12 +278,13 @@ func (mysql *Mysql) UpdateUser(id uint, username string, base64Pass string, orig
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	encryPass := sha256.Sum224([]byte(originPass))
 	if _, err := db.Exec("UPDATE users SET username=?, password=?, passwordShow=? WHERE id=?", username, fmt.Sprintf("%x", encryPass), base64Pass, id); err != nil {
 		fmt.Println(err)
 		return err
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -181,7 +294,6 @@ func (mysql *Mysql) DeleteUser(id uint) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	if userList, err := mysql.GetData(strconv.Itoa(int(id))); err != nil {
 		return err
 	} else if userList != nil && len(userList) == 0 {
@@ -191,6 +303,8 @@ func (mysql *Mysql) DeleteUser(id uint) error {
 		fmt.Println(err)
 		return err
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -200,16 +314,25 @@ func (mysql *Mysql) MonthlyResetData() error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	userList, err := queryUserList(db, "SELECT * FROM users WHERE useDays != 0 AND quota != 0")
 	if err != nil {
 		return err
 	}
-	for _, user := range userList {
-		if _, err := db.Exec("UPDATE users SET download=0, upload=0 WHERE id=?", user.ID); err != nil {
+	
+	// 批量更新优化：收集所有ID然后一次性更新
+	if len(userList) > 0 {
+		ids := make([]string, 0, len(userList))
+		for _, user := range userList {
+			ids = append(ids, strconv.Itoa(int(user.ID)))
+		}
+		// 使用 IN 子句批量更新
+		sql := fmt.Sprintf("UPDATE users SET download=0, upload=0 WHERE id IN (%s)", strings.Join(ids, ","))
+		if _, err := db.Exec(sql); err != nil {
 			return err
 		}
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -228,23 +351,34 @@ func (mysql *Mysql) DailyCheckExpire() (bool, error) {
 	if db == nil {
 		return false, errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	userList, err := queryUserList(db, "SELECT * FROM users WHERE quota != 0")
 	if err != nil {
 		return false, err
 	}
+	
+	// 批量更新优化：收集过期用户ID
+	expiredIDs := make([]string, 0)
 	for _, user := range userList {
 		if expireDate, err := time.Parse("2006-01-02", user.ExpiryDate); err == nil {
 			if yesterday.Sub(expireDate).Seconds() >= 0 {
-				if _, err := db.Exec("UPDATE users SET quota=0 WHERE id=?", user.ID); err != nil {
-					return false, err
-				}
+				expiredIDs = append(expiredIDs, strconv.Itoa(int(user.ID)))
 				if !needRestart {
 					needRestart = true
 				}
 			}
 		}
 	}
+	
+	// 批量更新过期用户
+	if len(expiredIDs) > 0 {
+		sql := fmt.Sprintf("UPDATE users SET quota=0 WHERE id IN (%s)", strings.Join(expiredIDs, ","))
+		if _, err := db.Exec(sql); err != nil {
+			return false, err
+		}
+		// 清除缓存
+		userCache.Clear()
+	}
+	
 	return needRestart, nil
 }
 
@@ -254,7 +388,6 @@ func (mysql *Mysql) CancelExpire(id uint) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	if _, err := db.Exec("UPDATE users SET useDays=0, expiryDate='' WHERE id=?", id); err != nil {
 		fmt.Println(err)
 		return err
@@ -277,7 +410,6 @@ func (mysql *Mysql) SetExpire(id uint, useDays uint) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	if _, err := db.Exec("UPDATE users SET useDays=?, expiryDate=? WHERE id=?", useDays, expiryDate, id); err != nil {
 		fmt.Println(err)
 		return err
@@ -291,11 +423,12 @@ func (mysql *Mysql) SetQuota(id uint, quota int) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	if _, err := db.Exec("UPDATE users SET quota=? WHERE id=?", quota, id); err != nil {
 		fmt.Println(err)
 		return err
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -305,11 +438,12 @@ func (mysql *Mysql) CleanData(id uint) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	if _, err := db.Exec("UPDATE users SET download=0, upload=0 WHERE id=?", id); err != nil {
 		fmt.Println(err)
 		return err
 	}
+	// 清除缓存
+	userCache.Clear()
 	return nil
 }
 
@@ -319,7 +453,6 @@ func (mysql *Mysql) CleanDataByName(usernames []string) error {
 	if db == nil {
 		return errors.New("can't connect mysql")
 	}
-	defer db.Close()
 	runSql := "UPDATE users SET download=0, upload=0 WHERE BINARY username in ("
 	for i, name := range usernames {
 		runSql = runSql + "'" + name + "'"
@@ -342,7 +475,6 @@ func (mysql *Mysql) GetUserByName(name string) *User {
 	if db == nil {
 		return nil
 	}
-	defer db.Close()
 	user, err := queryUser(db, "SELECT * FROM users WHERE BINARY username=?", name)
 	if err != nil {
 		return nil
@@ -356,7 +488,6 @@ func (mysql *Mysql) GetUserByPass(pass string) *User {
 	if db == nil {
 		return nil
 	}
-	defer db.Close()
 	user, err := queryUser(db, "SELECT * FROM users WHERE BINARY passwordShow=?", pass)
 	if err != nil {
 		return nil
@@ -374,7 +505,6 @@ func (mysql *Mysql) PageList(curPage int, pageSize int) (*PageQuery, error) {
 	if db == nil {
 		return nil, errors.New("连接mysql失败")
 	}
-	defer db.Close()
 	offset := (curPage - 1) * pageSize
 	querySQL := "SELECT * FROM users LIMIT ?, ?"
 	userList, err := queryUserList(db, querySQL, offset, pageSize)
@@ -392,14 +522,21 @@ func (mysql *Mysql) PageList(curPage int, pageSize int) (*PageQuery, error) {
 	}, nil
 }
 
-// GetData 获取用户记录
+// GetData 获取用户记录（带缓存）
 func (mysql *Mysql) GetData(ids ...string) ([]*User, error) {
+	// 如果查询所有用户，尝试从缓存获取
+	cacheKey := "all_users"
+	if len(ids) == 0 {
+		if cached, ok := userCache.Get(cacheKey); ok {
+			return cached.([]*User), nil
+		}
+	}
+
 	querySQL := "SELECT * FROM users"
 	db := mysql.GetDB()
 	if db == nil {
 		return nil, errors.New("连接mysql失败")
 	}
-	defer db.Close()
 	if len(ids) > 0 {
 		querySQL = querySQL + " WHERE id in (" + strings.Join(ids, ",") + ")"
 	}
@@ -408,5 +545,21 @@ func (mysql *Mysql) GetData(ids ...string) ([]*User, error) {
 		fmt.Println(err)
 		return nil, err
 	}
+
+	// 缓存结果（仅缓存全量查询）
+	if len(ids) == 0 {
+		userCache.Set(cacheKey, userList)
+	}
+
 	return userList, nil
+}
+
+// Close 关闭数据库连接池
+func (mysql *Mysql) Close() error {
+	if mysql.db != nil {
+		err := mysql.db.Close()
+		mysql.db = nil
+		return err
+	}
+	return nil
 }
